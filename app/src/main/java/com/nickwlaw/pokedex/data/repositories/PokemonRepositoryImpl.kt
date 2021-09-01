@@ -5,54 +5,34 @@ import com.nickwlaw.pokedex.data.models.domain.Pokemon
 import com.nickwlaw.pokedex.data.models.mappers.toDomain
 import com.nickwlaw.pokedex.data.network.PokemonAPI
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 class PokemonRepositoryImpl(private val pokemonApi: PokemonAPI) : PokemonRepository {
 
-    private val pokemonListCache = mutableListOf<Pokemon>()
+    private val pokemonListCache = mutableSetOf<Pokemon>()
 
-    override fun getPokemonList(): List<Pokemon> {
-        if (pokemonListCache.isEmpty()) {
-            fetchPokemonList()
-        }
+    override fun getPokemonList(): Flow<Set<Pokemon>> = flow {
+        val resourceListResponse = pokemonApi.getPokemonResourceList()
 
-        return pokemonListCache
-    }
+        if (resourceListResponse.isSuccessful) {
+            Log.d(TAG, resourceListResponse.body().toString())
 
-    private fun fetchPokemonList() {
-        CoroutineScope(Dispatchers.IO).launch {
-            val resourceListResponse = pokemonApi.getPokemonResourceList()
-
-            if (resourceListResponse.isSuccessful) {
-                Log.d(TAG, resourceListResponse.body().toString())
-
-                resourceListResponse.body()?.let { response ->
-                    val runningTasks = response.results.map {
-                        async {
-                            getPokemon(it.name)
-                        }
+            resourceListResponse.body()?.let { response ->
+                response.results.map { namedResource ->
+                    getPokemon(namedResource.name)?.let { mon ->
+                        pokemonListCache.add(mon)
+                        emit(pokemonListCache)
                     }
-
-                    val responses = runningTasks.awaitAll()
-                    val pokemonList = mutableListOf<Pokemon>()
-
-                    responses.sortedBy { it?.id }.forEach {
-                        if (it != null) {
-                            pokemonList.add(it)
-                        }
-                    }
-
-                    pokemonListCache.addAll(pokemonList)
                 }
-            } else {
-                Log.d(
-                    TAG,
-                    "Error fetching Pokemon Resource List: ${
-                        resourceListResponse.errorBody().toString()
-                    }"
-                )
             }
         }
-    }
+
+    }.shareIn(
+        scope = CoroutineScope(Dispatchers.Default),
+        started = SharingStarted.Lazily,
+        replay = 1
+    )
+
 
     private suspend fun getPokemon(name: String): Pokemon? {
         val pokemonResponse = pokemonApi.getPokemon(name)
